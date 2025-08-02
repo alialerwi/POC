@@ -583,6 +583,14 @@
             font-weight: 600;
         }
 
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-style: italic;
+            grid-column: span 20;
+        }
+
         /* Grid Layouts */
         .grid-2 {
             display: grid;
@@ -917,35 +925,69 @@
                 });
             },
 
-            // Health Devices
+            // Health Devices - Now populated from backend
             generateHealthDevices() {
+                // This method is now just a placeholder - health devices come from backend
+                const healthList = document.getElementById('healthList');
+                if (!healthList) return;
+                
+                // Show loading state while waiting for backend data
+                healthList.innerHTML = '<div class="loading">Loading health devices from backend...</div>';
+                
+                // Request health devices from backend
+                if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+                    this.socket.send(JSON.stringify({type: 'get_health_devices'}));
+                }
+            },
+
+            // Handle health devices data from backend
+            handleHealthDevices(data) {
                 const healthList = document.getElementById('healthList');
                 if (!healthList) return;
                 
                 healthList.innerHTML = '';
                 
-                const statuses = [
-                    ...Array(90).fill({status: '🟢', text: 'Online', class: 'health-online'}),
-                    ...Array(7).fill({status: '🟠', text: 'Warning', class: 'health-warning'}),
-                    ...Array(3).fill({status: '🔴', text: 'Offline', class: 'health-offline'})
-                ];
-                
-                // Shuffle for random distribution
-                for (let i = statuses.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [statuses[i], statuses[j]] = [statuses[j], statuses[i]];
-                }
-                
-                statuses.forEach((device, index) => {
+                data.forEach(device => {
                     const deviceCard = document.createElement('div');
                     deviceCard.className = 'health-card';
-                    deviceCard.setAttribute('data-tooltip', `Device ${(index + 1).toString().padStart(3, '0')}: ${device.text}`);
+                    
+                    // Map backend status to frontend display
+                    let statusIcon, statusClass, statusText;
+                    switch(device.status) {
+                        case 'ONLINE':
+                            statusIcon = '🟢';
+                            statusClass = 'health-online';
+                            statusText = 'Online';
+                            break;
+                        case 'WARNING':
+                            statusIcon = '🟠';
+                            statusClass = 'health-warning';
+                            statusText = 'Warning';
+                            break;
+                        case 'OFFLINE':
+                            statusIcon = '🔴';
+                            statusClass = 'health-offline';
+                            statusText = 'Offline';
+                            break;
+                        default:
+                            statusIcon = '⚪';
+                            statusClass = 'health-unknown';
+                            statusText = 'Unknown';
+                    }
+                    
+                    const tooltipText = `${device.name}: ${statusText}` + 
+                        (device.response_time ? ` (${device.response_time}ms)` : '');
+                    
+                    deviceCard.className = `health-card ${statusClass}`;
+                    deviceCard.setAttribute('data-tooltip', tooltipText);
                     deviceCard.innerHTML = `
-                        <div class="health-status">${device.status}</div>
-                        <div class="health-name">D${(index + 1).toString().padStart(3, '0')}</div>
+                        <div class="health-status">${statusIcon}</div>
+                        <div class="health-name">${device.device_id}</div>
                     `;
                     healthList.appendChild(deviceCard);
                 });
+
+                console.log(`📊 Updated ${data.length} health devices from backend`);
             },
 
             // Map
@@ -1020,6 +1062,8 @@
                         this.updateStats(data.data);
                     } else if (data.type === 'message') {
                         this.addMessage(data);
+                    } else if (data.type === 'health_devices') {
+                        this.handleHealthDevices(data.data);
                     }
                 };
 

@@ -119,6 +119,21 @@ class SecurityDevice:
         if self.last_seen is None:
             self.last_seen = datetime.now()
 
+@dataclass
+class HealthDevice:
+    device_id: str
+    name: str
+    status: DeviceStatus
+    device_type: str = "HealthMonitor"
+    last_update: datetime = None
+    response_time: int = None  # in milliseconds
+    
+    def __post_init__(self):
+        if self.last_update is None:
+            self.last_update = datetime.now()
+        if self.response_time is None:
+            self.response_time = random.randint(10, 200)
+
 class MQTTPacketBuffer:
     """Handles proper MQTT packet buffering and boundary detection"""
 
@@ -222,6 +237,7 @@ class BizclapSecurityBackend:
         self.websocket_clients: Set[websockets.WebSocketServerProtocol] = set()
         self.simulated_clients: Dict[str, MQTTClient] = {}
         self.security_devices: Dict[str, SecurityDevice] = {}
+        self.health_devices: Dict[str, HealthDevice] = {}
         
         # Common components
         self.start_time = datetime.now()
@@ -233,6 +249,7 @@ class BizclapSecurityBackend:
         # Initialize simulation data
         self._initialize_security_devices()
         self._initialize_simulated_clients()
+        self._initialize_health_devices()
         
         logger.info("🏗️  Bizclap Security Backend initialized (Hybrid Mode)")
 
@@ -295,6 +312,35 @@ class BizclapSecurityBackend:
                 is_simulated=True
             )
             self.simulated_clients[client_id] = client
+
+    def _initialize_health_devices(self):
+        """Initialize 100 health monitoring devices with realistic distribution"""
+        # Create 100 health devices with realistic status distribution
+        # 90% online, 7% warning, 3% offline (matching frontend logic)
+        statuses = (
+            [DeviceStatus.ONLINE] * 90 +
+            [DeviceStatus.WARNING] * 7 +
+            [DeviceStatus.OFFLINE] * 3
+        )
+        
+        # Shuffle for random distribution
+        random.shuffle(statuses)
+        
+        for i in range(100):
+            device_id = f"D{(i + 1):03d}"
+            device_name = f"Device {(i + 1):03d}"
+            status = statuses[i]
+            
+            self.health_devices[device_id] = HealthDevice(
+                device_id=device_id,
+                name=device_name,
+                status=status,
+                device_type="HealthMonitor",
+                response_time=random.randint(10, 200) if status == DeviceStatus.ONLINE else 
+                           random.randint(200, 1000) if status == DeviceStatus.WARNING else None
+            )
+        
+        logger.info(f"🏥 Initialized {len(self.health_devices)} health monitoring devices")
 
     # ============================================================================
     # REAL MQTT BROKER FUNCTIONALITY (from original)
@@ -736,6 +782,7 @@ class BizclapSecurityBackend:
             try:
                 # Send initial data
                 await self._send_status_update(websocket)
+                await self._send_health_devices(websocket)
                 
                 # Keep connection alive and handle messages
                 async for message in websocket:
@@ -803,6 +850,8 @@ class BizclapSecurityBackend:
             await self._send_status_update(websocket)
         elif message_type == 'get_devices':
             await self._send_device_status(websocket)
+        elif message_type == 'get_health_devices':
+            await self._send_health_devices(websocket)
         elif message_type == 'device_command':
             await self._handle_device_command(websocket, data)
 
@@ -873,6 +922,25 @@ class BizclapSecurityBackend:
         }
         
         await self._broadcast_to_websockets(device_data, websocket)
+
+    async def _send_health_devices(self, websocket=None):
+        """Send health monitoring devices status"""
+        health_data = {
+            "type": "health_devices",
+            "data": [
+                {
+                    "device_id": device.device_id,
+                    "name": device.name,
+                    "status": device.status.value,
+                    "device_type": device.device_type,
+                    "last_update": device.last_update.isoformat(),
+                    "response_time": device.response_time
+                }
+                for device in self.health_devices.values()
+            ]
+        }
+        
+        await self._broadcast_to_websockets(health_data, websocket)
 
     async def _handle_device_command(self, websocket, data):
         """Handle device control commands"""
@@ -1091,6 +1159,9 @@ class BizclapSecurityBackend:
                 # Update device statuses
                 await self._update_device_statuses()
                 
+                # Update health device statuses
+                await self._update_health_device_statuses()
+                
                 # Send periodic status updates
                 await self._send_status_update()
                 
@@ -1145,6 +1216,64 @@ class BizclapSecurityBackend:
                     })
                     
                     await self._simulate_mqtt_message(topic, payload, f"monitor_{device_id}")
+
+    async def _update_health_device_statuses(self):
+        """Randomly update health device statuses for realistic simulation"""
+        if random.random() < 0.02:  # 2% chance to update some health devices
+            # Update 1-3 devices
+            num_updates = random.randint(1, 3)
+            devices_to_update = random.sample(list(self.health_devices.keys()), num_updates)
+            
+            for device_id in devices_to_update:
+                device = self.health_devices[device_id]
+                old_status = device.status
+                
+                # Small chance to change status with realistic transitions
+                if random.random() < 0.1:  # 10% chance to change status
+                    if device.status == DeviceStatus.ONLINE:
+                        # Online can go to warning (5%) or offline (1%)
+                        if random.random() < 0.05:
+                            device.status = DeviceStatus.WARNING
+                        elif random.random() < 0.01:
+                            device.status = DeviceStatus.OFFLINE
+                    elif device.status == DeviceStatus.WARNING:
+                        # Warning can recover to online (20%) or fail to offline (10%)
+                        if random.random() < 0.2:
+                            device.status = DeviceStatus.ONLINE
+                        elif random.random() < 0.1:
+                            device.status = DeviceStatus.OFFLINE
+                    elif device.status == DeviceStatus.OFFLINE:
+                        # Offline can recover to warning (15%) or online (5%)
+                        if random.random() < 0.15:
+                            device.status = DeviceStatus.WARNING
+                        elif random.random() < 0.05:
+                            device.status = DeviceStatus.ONLINE
+                
+                # Update response time based on status
+                if device.status == DeviceStatus.ONLINE:
+                    device.response_time = random.randint(10, 200)
+                elif device.status == DeviceStatus.WARNING:
+                    device.response_time = random.randint(200, 1000)
+                else:  # OFFLINE
+                    device.response_time = None
+                
+                device.last_update = datetime.now()
+                
+                # If status changed, broadcast update and log
+                if old_status != device.status:
+                    logger.info(f"🏥 Health device {device_id} status changed: {old_status.value} → {device.status.value}")
+                    await self._send_health_devices()  # Broadcast to all clients
+                    
+                    # Also simulate an MQTT message for this change
+                    topic = f"health/{device_id}/status"
+                    payload = json.dumps({
+                        "device_id": device_id,
+                        "old_status": old_status.value,
+                        "new_status": device.status.value,
+                        "response_time": device.response_time,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    await self._simulate_mqtt_message(topic, payload, f"health_monitor_{device_id}")
 
     async def _simulate_mqtt_traffic(self):
         """Generate realistic MQTT traffic for demonstration"""
